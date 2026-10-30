@@ -4,7 +4,8 @@ param(
   [Parameter(Mandatory = $true)][string]$X64Build,
   [Parameter(Mandatory = $true)][string]$X86Build,
   [Parameter(Mandatory = $true)][string]$Version,
-  [string]$Out = 'nupkg'
+  [string]$Out = 'nupkg',
+  [switch]$RequireNotes
 )
 
 $ErrorActionPreference = 'Stop'
@@ -28,7 +29,32 @@ Copy-Item "$X64Build\libbluray\bdj\libbluray-*.jar" $rt
 
 Copy-Item "$PSScriptRoot\MediaPortal.libbluray.props", "$PSScriptRoot\MediaPortal.libbluray.targets" "$stage\build"
 Copy-Item "$repo\COPYING" $stage
-Copy-Item "$PSScriptRoot\MediaPortal.libbluray.nuspec" $stage
+New-Item -ItemType Directory -Force "$stage\docs" | Out-Null
+Copy-Item "$repo\docs\ATTRIBUTION.md" "$stage\docs"
+
+# Release notes: the '## [<Version>]' section of docs/RELEASE-NOTES.md, or '## [Unreleased]' for CI builds.
+$notes = New-Object System.Collections.Generic.List[string]
+$inside = $false
+foreach ($line in Get-Content "$repo\docs\RELEASE-NOTES.md") {
+  if ($line -match '^## \[(.+?)\]') {
+    if ($inside) { break }
+    $inside = ($Matches[1] -eq $Version)
+    continue
+  }
+  if ($inside) { $notes.Add($line) }
+}
+$text = ($notes -join "`n").Trim()
+if (-not $text -and $RequireNotes) { throw "docs/RELEASE-NOTES.md has no section '## [$Version]'" }
+New-Item -ItemType Directory -Force $Out | Out-Null
+Set-Content -LiteralPath "$Out\release-notes.md" -Value $text -Encoding utf8
+
+$nuspec = [xml](Get-Content -Raw "$PSScriptRoot\MediaPortal.libbluray.nuspec")
+if ($text) {
+  $el = $nuspec.CreateElement('releaseNotes', $nuspec.DocumentElement.NamespaceURI)
+  $el.InnerText = $text
+  $nuspec.package.metadata.AppendChild($el) | Out-Null
+}
+$nuspec.Save("$stage\MediaPortal.libbluray.nuspec")
 
 nuget pack "$stage\MediaPortal.libbluray.nuspec" -Version $Version -OutputDirectory $Out -NoPackageAnalysis
 if ($LASTEXITCODE -ne 0) { throw 'nuget pack failed' }

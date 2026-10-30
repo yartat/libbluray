@@ -1,4 +1,10 @@
 # Libbluray
+[![License: LGPL v2.1+](https://img.shields.io/badge/license-LGPL--2.1--or--later-blue.svg)](COPYING)
+[![NuGet build](https://github.com/yartat/libbluray/actions/workflows/nuget.yml/badge.svg)](https://github.com/yartat/libbluray/actions/workflows/nuget.yml)
+[![NuGet](https://img.shields.io/nuget/v/MediaPortal.libbluray?logo=nuget&label=MediaPortal.libbluray)](https://www.nuget.org/packages/MediaPortal.libbluray)
+[![NuGet downloads](https://img.shields.io/nuget/dt/MediaPortal.libbluray?logo=nuget)](https://www.nuget.org/packages/MediaPortal.libbluray)
+[![Latest release](https://img.shields.io/github/v/release/yartat/libbluray?display_name=tag)](https://github.com/yartat/libbluray/releases/latest)
+
 **Libbluray** is an open-source **lib**rary designed for **Blu-Ray** Discs playback for media players, like **VLC** or **MPlayer**.
 
 
@@ -14,6 +20,23 @@ Most commercial Blu-Ray are protected by **AACS** or **BD+** technologies and th
 People interested in AACS technologies should have a look at [libaacs](https://code.videolan.org/videolan/libaacs).
 
 People interested in BD+ technologies should have a look at [libbdplus](https://code.videolan.org/videolan/libbdplus).
+
+## MediaPortal fork
+
+This repository is the libbluray fork used by [MediaPortal 1](https://github.com/MediaPortal/MediaPortal-1)
+(BDReader). It follows upstream releases and adds a few MediaPortal patches. The binaries are published as the NuGet
+package [`MediaPortal.libbluray`](https://www.nuget.org/packages/MediaPortal.libbluray): `bluray.dll` for x86 and x64,
+the BD-J jars and the headers.
+
+```powershell
+nuget install MediaPortal.libbluray
+```
+
+- [Release notes](docs/RELEASE-NOTES.md) and the upstream [ChangeLog](ChangeLog)
+- [Building and releasing](docs/BUILD.md)
+- [Attribution and third-party licenses](docs/ATTRIBUTION.md)
+- [Privacy](PRIVACY.md)
+
 
 ## License
 

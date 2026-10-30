@@ -4,7 +4,7 @@ on:
   push:
     tags: ['v*']
   pull_request:
-    paths: ['package/nuget/**', '.github/workflows/nuget.yml']
+    paths: ['package/nuget/**', 'docs/RELEASE-NOTES.md', 'docs/ATTRIBUTION.md', '.github/workflows/nuget.yml']
   workflow_dispatch:
 
 permissions:
@@ -19,7 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
@@ -67,12 +67,15 @@ jobs:
       - name: Pack
         shell: pwsh
         run: |
-          $version = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME.TrimStart('v') } else { "0.0.0-ci.$env:GITHUB_RUN_NUMBER" }
-          .\package\nuget\pack.ps1 -X64Build artifacts\build-x64 -X86Build artifacts\build-x86 -Version $version -Out nupkg
+          $isTag = $env:GITHUB_REF_TYPE -eq 'tag'
+          $version = if ($isTag) { $env:GITHUB_REF_NAME.TrimStart('v') } else { "0.0.0-ci.$env:GITHUB_RUN_NUMBER" }
+          .\package\nuget\pack.ps1 -X64Build artifacts\build-x64 -X86Build artifacts\build-x86 -Version $version -Out nupkg -RequireNotes:$isTag
       - uses: actions/upload-artifact@v4
         with:
           name: nupkg
-          path: nupkg/*.nupkg
+          path: |
+            nupkg/*.nupkg
+            nupkg/release-notes.md
 
   publish:
     if: github.ref_type == 'tag'
@@ -81,6 +84,7 @@ jobs:
     environment: nuget
     permissions:
       id-token: write
+      contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -90,3 +94,8 @@ jobs:
         with:
           user: ${{ vars.NUGET_USER }}
       - run: dotnet nuget push "*.nupkg" --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" --source https://api.nuget.org/v3/index.json --skip-duplicate
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" *.nupkg --repo "$GITHUB_REPOSITORY" --title "MediaPortal.libbluray ${GITHUB_REF_NAME#v}" --notes-file release-notes.md             || gh release upload "$GITHUB_REF_NAME" *.nupkg --repo "$GITHUB_REPOSITORY" --clobber
