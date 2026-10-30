@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2010/07/nuspec.xsd">
+  <metadata>
+    <id>MediaPortal.libbluray</id>
+    <version>$version$</version>
+    <authors>VideoLAN, MediaPortal Team</authors>
+    <owners>MediaPortal Team</owners>
+    <license type="expression">LGPL-2.1-or-later</license>
+    <projectUrl>https://github.com/yartat/libbluray</projectUrl>
+    <repository type="git" url="https://github.com/yartat/libbluray" />
+    <description>libbluray with MediaPortal patches (bd_get_clip_infos, long win32 paths): headers for BDReader, bluray.dll (x86, x64), BD-J jars (libbluray-j2se, libbluray-awt-j2se) and freetype linked in statically.</description>
+    <tags>MediaPortal libbluray bluray native nativepackage</tags>
+  </metadata>
+</package>
