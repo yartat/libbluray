@@ -39,7 +39,9 @@
 #include <stdio.h>
 #include <string.h>
 
+#ifdef ENABLE_UDF
 #include "udf_fs.h"
+#endif
 
 struct bd_disc {
     BD_MUTEX  ovl_mutex;     /* protect access to overlay root */
@@ -84,7 +86,7 @@ static BD_FILE_H *_bdrom_open_path(void *p, const char *rel_path)
         return NULL;
     }
 
-    fp = file_open(abs_path, "rb");
+    fp = file_open(abs_path, "rbS");
     X_FREE(abs_path);
 
     return fp;
@@ -326,6 +328,7 @@ BD_DISC *disc_open(const char *device_path,
     _set_paths(p, device_path);
 
     /* check if disc root directory can be opened. If not, treat it as device/image file. */
+#ifdef ENABLE_UDF
     BD_DIR_H *dp_img = device_path ? dir_open(device_path) : NULL;
     if (!dp_img) {
         void *udf = bdpriv_udf_image_open(device_path, p_fs ? p_fs->fs_handle : NULL, p_fs ? p_fs->read_blocks : NULL);
@@ -346,6 +349,7 @@ BD_DISC *disc_open(const char *device_path,
         dir_close(dp_img);
         BD_DEBUG(DBG_FILE, "%s does not seem to be image file or device node\n", device_path);
     }
+#endif
 
     struct dec_dev dev = { p->fs_handle, p->pf_file_open_bdrom, p, (file_openFp)disc_open_path, p->disc_root, device_path };
     p->dec = bdpriv_dec_init(&dev, enc_info, keyfile_path, regs, psr_read, psr_write);
