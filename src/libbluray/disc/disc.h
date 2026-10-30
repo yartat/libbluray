@@ -80,7 +80,11 @@ BD_PRIVATE size_t disc_read_file(BD_DISC *disc, const char *dir, const char *fil
 /* Update virtual package */
 BD_PRIVATE void disc_update(BD_DISC *disc, const char *overlay_root);
 
+/* Cache file directly from BD-ROM */
 BD_PRIVATE int  disc_cache_bdrom_file(BD_DISC *p, const char *rel_path, const char *cache_path);
+
+/* Open decrypted file */
+BD_PRIVATE struct bd_file_s *disc_open_path_dec(BD_DISC *p, const char *rel_path);
 
 /* open BD-ROM directory (relative to disc root) */
 BD_PRIVATE struct bd_dir_s  *disc_open_bdrom_dir(BD_DISC *disc, const char *path);
@@ -119,6 +123,17 @@ enum {
 };
 
 BD_PRIVATE void disc_event(BD_DISC *, uint32_t event, uint32_t param);
+
+/*
+ * cache
+ *
+ * Cache can hold any reference-counted objects (= allocated with refcnt_*).
+ *
+ */
+
+BD_PRIVATE const void *disc_cache_get(BD_DISC *, const char *key);
+BD_PRIVATE void        disc_cache_put(BD_DISC *, const char *key, const void *data);
+BD_PRIVATE void        disc_cache_clean(BD_DISC *, const char *key);  /* NULL key == drop all */
 
 
 #endif /* _BD_DISC_H_ */

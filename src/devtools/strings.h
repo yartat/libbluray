@@ -17,6 +17,9 @@
  * <http://www.gnu.org/licenses/>.
  */
 
+#ifndef BLURAY_STRINGS_H
+#define BLURAY_STRINGS_H
+
 typedef struct {
     int value;
     const char *str;
@@ -41,8 +44,8 @@ const VALUE_MAP codec_map[] = {
     {0x20, "H.264 MVC dep."},
     {0x24, "HEVC"},
     {0x90, "Presentation Graphics"},
-    {0x91, "Presentation Graphics"},
-    {0x92, "Interactive Graphics"},
+    {0x91, "Interactive Graphics"},
+    {0x92, "Text subtitle"},
     {0, NULL}
 };
 
@@ -95,6 +98,19 @@ const VALUE_MAP audio_rate_map[] = {
     {0, NULL}
 };
 
+const VALUE_MAP dynamic_range_type_map[] = {
+    {0, "SDR"},
+    {1, "HDR10"},
+    {2, "Dolby Vision"},
+    {0, NULL}
+};
+
+const VALUE_MAP color_space_map[] = {
+    {1, "BT.709"},
+    {2, "BT.2020"},
+    {0, NULL}
+};
+
 static inline const char *
 _lookup_str(const VALUE_MAP *map, int val)
 {
@@ -107,3 +123,5 @@ _lookup_str(const VALUE_MAP *map, int val)
     }
     return "?";
 }
+
+#endif // BLURAY_STRINGS_H

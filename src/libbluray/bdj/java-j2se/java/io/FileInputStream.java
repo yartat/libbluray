@@ -73,11 +73,10 @@ public class FileInputStream extends InputStream
 
         if (file.isAbsolute()) {
             String cachedName = BDJLoader.getCachedFile(name);
-            if (cachedName != name) {
+            if (!cachedName.equals(name)) {
                 getLogger().info("Using cached " + cachedName + " for " + name);
-                name = cachedName;
             }
-            openImpl(name);
+            openImpl(cachedName);
         } else {
             /* relative paths are problematic ... */
             /* Those should be mapped to xlet home directory, which is inside .jar file. */
@@ -139,7 +138,7 @@ public class FileInputStream extends InputStream
     public  int  read() throws IOException {
         byte b[] = new byte[1];
         if (read(b) == 1)
-            return b[0];
+            return ((int)b[0]) & 0xff;
         return -1;
     }
 

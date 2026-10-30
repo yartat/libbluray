@@ -23,7 +23,9 @@ package org.videolan;
 import java.awt.BDFontMetrics;
 import java.awt.BDToolkit;
 import java.awt.event.KeyEvent;
+import java.awt.event.MouseEvent;
 import java.io.File;
+import java.lang.reflect.Method;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Vector;
@@ -37,7 +39,7 @@ import org.bluray.bdplus.Status;
 import org.bluray.net.BDLocator;
 import org.bluray.system.RegisterAccess;
 import org.bluray.ti.DiscManager;
-import org.bluray.ti.TitleImpl;
+import org.bluray.ti.Title;
 import org.bluray.ti.selection.TitleContext;
 import org.bluray.ui.event.HRcEvent;
 import org.dvb.event.EventManager;
@@ -114,9 +116,48 @@ public class Libbluray {
         }
     }
 
-    /*
-     *
-     */
+    public static int getJavaMajor() {
+        try {
+            String ver = System.getProperty("java.version");
+            if (ver.startsWith("1."))
+                ver = ver.substring(2, 3);
+            if (ver.indexOf(".") != -1)
+                ver = ver.substring(0, ver.indexOf("."));
+            if (ver.indexOf("-") != -1)
+                ver = ver.substring(0, ver.indexOf("-"));
+            return Integer.parseInt(ver);
+        } catch (Throwable t) {
+            System.err.println("getJavaMajor(): " + t);
+        }
+        return 0;
+    }
+
+    private static void setSecurityManager(SecurityManager sm) throws Exception {
+        try {
+            System.setSecurityManager(sm);
+            return;
+        } catch (Exception ex) {
+            if (getJavaMajor() < 18)
+                throw ex;
+
+            /* Workaround for Java 18 security manager issues.
+             *   Suggested method (setting security manager to "allow" in command line args)
+             *   fails with older Java versions.
+             *   And, Java version is hard to figure out before launching JVM.
+             */
+            System.err.println("Detected Java >= 18, trying setSecurityManager() workaround");
+            try {
+                Method method = System.class.getDeclaredMethod("implSetSecurityManager",
+                                                              new Class [] { SecurityManager.class });
+                method.setAccessible(true);
+                method.invoke(null, new Object [] { (Object)sm } );
+                return;
+            } catch (Exception ex2) {
+                System.err.println("" + ex2);
+                throw new RuntimeException("", ex);
+            }
+        }
+    }
 
     private static boolean initOnce = false;
     private static void initOnce() {
@@ -124,6 +165,11 @@ public class Libbluray {
             return;
         }
         initOnce = true;
+
+        Logger.getLogger("Libbluray").info(
+            "Using Java " + System.getProperty("java.vm.specification.version", "?") +
+            " (" + System.getProperty("java.vm.version", "?") + ")" +
+            " from '" + System.getProperty("java.home", "?") + "'");
 
         /* hook system properties (provide Xlet-specific user.dir) */
         try {
@@ -343,7 +389,7 @@ public class Libbluray {
         System.setProperty("bluray.network.connected", "YES");
 
         try {
-            System.setSecurityManager(new BDJSecurityManager(discRoot, persistentRoot, budaRoot));
+            setSecurityManager(new BDJSecurityManager(discRoot, persistentRoot, budaRoot, getJavaMajor()));
         } catch (Exception ex) {
             System.err.println("System.setSecurityManager() failed: " + ex);
             throw new SecurityException("Failed initializing SecurityManager");
@@ -351,6 +397,13 @@ public class Libbluray {
 
         loadAdapter(System.getProperty("org.videolan.loader.adapter"));
         loadAdapter(pkg);
+
+        /* get title infos */
+        titleInfos = getTitleInfosN(nativePointer);
+        if (titleInfos == null) {
+            /* this is fatal */
+            throw new Error("getTitleInfos() failed");
+        }
 
         booted = true;
     }
@@ -367,7 +420,7 @@ public class Libbluray {
 
             /* all Xlet contexts (and threads) should be terminated now */
             try {
-                System.setSecurityManager(null);
+                setSecurityManager(null);
             } catch (Exception ex) {
                 System.err.println("System.setSecurityManager(null) failed: " + ex);
             }
@@ -382,16 +435,22 @@ public class Libbluray {
             Status.shutdown();
             ServiceContextFactoryImpl.shutdown();
             FontFactory.unloadDiscFonts();
-            CacheDir.remove();
         } catch (Throwable e) {
             System.err.println("shutdown() failed: " + e + "\n" + Logger.dumpStack(e));
         }
-        nativePointer = 0;
-        synchronized (titleInfosLock) {
-            titleInfos = null;
+        try {
+            BDJAppProxy.cleanup();
+            CacheDir.remove();
+        } catch (Throwable e) {
+            System.err.println("cleanup failed: " + e + "\n" + Logger.dumpStack(e));
         }
+        nativePointer = 0;
+        titleInfos = null;
         synchronized (bdjoFilesLock) {
             bdjoFiles = null;
+        }
+        synchronized (mplsFilesLock) {
+            mplsFiles = null;
         }
         classLoaderAdapter = null;
         loaderAdapter = null;
@@ -429,20 +488,11 @@ public class Libbluray {
 
     /* used by javax/tv/service/SIManagerImpl */
     public static int numTitles() {
-        synchronized (titleInfosLock) {
-            if (titleInfos == null) {
-                titleInfos = getTitleInfosN(nativePointer);
-                if (titleInfos == null) {
-                    return -1;
-                }
-            }
-            return titleInfos.length - 2;
-        }
+        return titleInfos.length - 2;
     }
 
     /* used by org/bluray/ti/TitleImpl */
     public static TitleInfo getTitleInfo(int titleNum) {
-        synchronized (titleInfosLock) {
             int numTitles = numTitles();
             if (numTitles < 0)
                 return null;
@@ -455,7 +505,6 @@ public class Libbluray {
                 throw new IllegalArgumentException();
 
             return titleInfos[titleNum];
-        }
     }
 
     /* used by org/bluray/ti/PlayListImpl */
@@ -471,13 +520,32 @@ public class Libbluray {
     /* cache parsed .bdjo files */
     private static Map bdjoFiles = null;
     private static Object bdjoFilesLock = new Object();
+    /* cache parsed .mpls files */
+    private static Map mplsFiles = null;
+    private static Object mplsFilesLock = new Object();
+
 
     public static byte[] getAacsData(int type) {
         return getAacsDataN(nativePointer, type);
     }
 
     public static PlaylistInfo getPlaylistInfo(int playlist) {
-        return getPlaylistInfoN(nativePointer, playlist);
+        PlaylistInfo mpls;
+        synchronized (mplsFilesLock) {
+            if (mplsFiles == null) {
+                mplsFiles = new HashMap();
+            } else {
+                mpls = (PlaylistInfo)mplsFiles.get(Integer.valueOf(playlist));
+                if (mpls != null) {
+                    return mpls;
+                }
+            }
+            mpls = getPlaylistInfoN(nativePointer, playlist);
+            if (mpls != null) {
+                mplsFiles.put(Integer.valueOf(playlist), mpls);
+            }
+            return mpls;
+        }
     }
 
     public static Bdjo getBdjo(String name) {
@@ -633,17 +701,15 @@ public class Libbluray {
      */
 
     private static boolean startTitle(int titleNumber) {
-
-        TitleContext titleContext = null;
         try {
             BDLocator locator = new BDLocator(null, titleNumber, -1);
-            TitleImpl title   = (TitleImpl)SIManager.createInstance().getService(locator);
+            Title title = (Title)SIManager.createInstance().getService(locator);
             if (title == null) {
                 System.err.println("startTitle() failed: title " + titleNumber + " not found");
                 return false;
             }
 
-            titleContext = (TitleContext)ServiceContextFactory.getInstance().getServiceContext(null);
+            TitleContext titleContext = (TitleContext)ServiceContextFactory.getInstance().getServiceContext(null);
             titleContext.start(title, true);
             return true;
 
@@ -654,9 +720,8 @@ public class Libbluray {
     }
 
     private static boolean stopTitle(boolean shutdown) {
-        TitleContext titleContext = null;
         try {
-            titleContext = (TitleContext)ServiceContextFactory.getInstance().getServiceContext(null);
+            TitleContext titleContext = (TitleContext)ServiceContextFactory.getInstance().getServiceContext(null);
             if (shutdown) {
                 titleContext.destroy();
             } else {
@@ -702,7 +767,7 @@ public class Libbluray {
             break;
 
         case BDJ_EVENT_VK_KEY:
-            switch (param) {
+            switch (param & 0xffff) {
             case  0: key = KeyEvent.VK_0; break;
             case  1: key = KeyEvent.VK_1; break;
             case  2: key = KeyEvent.VK_2; break;
@@ -723,8 +788,17 @@ public class Libbluray {
             case 404: key = HRcEvent.VK_COLORED_KEY_1; break;
             case 405: key = HRcEvent.VK_COLORED_KEY_2; break;
             case 406: key = HRcEvent.VK_COLORED_KEY_3; break;
-            case 17:
-                result = java.awt.BDJHelper.postMouseEvent(0);
+            case 17: /* BD_VK_MOUSE_ACTIVATE */
+                result = false;
+                if ((param & 0x80000000) != 0) {
+                    result = java.awt.BDJHelper.postMouseEvent(MouseEvent.MOUSE_PRESSED) || result;
+                }
+                if ((param & 0x40000000) != 0) {
+                    result = java.awt.BDJHelper.postMouseEvent(MouseEvent.MOUSE_CLICKED) || result;
+                }
+                if ((param & 0x20000000) != 0) {
+                    result = java.awt.BDJHelper.postMouseEvent(MouseEvent.MOUSE_RELEASED) || result;
+                }
                 key = -1;
                 break;
             default:
@@ -733,9 +807,16 @@ public class Libbluray {
                 break;
             }
             if (key > 0) {
-                boolean r1 = EventManager.getInstance().receiveKeyEventN(KeyEvent.KEY_PRESSED, 0, key);
-                boolean r2 = EventManager.getInstance().receiveKeyEventN(KeyEvent.KEY_TYPED, 0, key);
-                boolean r3 = EventManager.getInstance().receiveKeyEventN(KeyEvent.KEY_RELEASED, 0, key);
+                boolean r1 = false, r2 = false, r3 = false;
+                if ((param & 0x80000000) != 0) {
+                    r1 = EventManager.getInstance().receiveKeyEventN(KeyEvent.KEY_PRESSED, 0, key);
+                }
+                if ((param & 0x40000000) != 0) {
+                    r2 = EventManager.getInstance().receiveKeyEventN(KeyEvent.KEY_TYPED, 0, key);
+                }
+                if ((param & 0x20000000) != 0) {
+                    r3 = EventManager.getInstance().receiveKeyEventN(KeyEvent.KEY_RELEASED, 0, key);
+                }
                 result = r1 || r2 || r3;
             }
             break;
@@ -814,6 +895,5 @@ public class Libbluray {
                                               int x0, int y0, int x1, int y1);
 
     private static long nativePointer = 0;
-    private static Object titleInfosLock = new Object();
     private static TitleInfo[] titleInfos = null;
 }

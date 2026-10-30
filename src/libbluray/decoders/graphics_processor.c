@@ -102,7 +102,7 @@ static PES_BUFFER *_find_segment_by_idv(PES_BUFFER *p,
                                         uint8_t seg_type, unsigned idv_pos,
                                         uint8_t *idv, unsigned idv_len)
 {
-    while (p && (p->buf[0] != seg_type || memcmp(p->buf + idv_pos, idv, idv_len))) {
+    while (p && (p->buf[0] != seg_type || p->len < idv_pos + idv_len || memcmp(p->buf + idv_pos, idv, idv_len))) {
         p = p->next;
     }
     return p;
@@ -159,9 +159,15 @@ static int _join_segment_fragments(struct pes_buffer_s *p)
 
     /* check sequence descriptor - is segment complete ? */
 
+    if (p->len < sd_pos + 1) {
+        /* invalid, incomplete header */
+        BD_DEBUG(DBG_DECODE|DBG_CRIT, "Missing header in segment 0x%02x, len=%u\n", type, p->len);
+        return 1;
+    }
+
     BD_PG_SEQUENCE_DESCRIPTOR sd;
     BITBUFFER bb;
-    bb_init(&bb, p->buf + sd_pos, 3);
+    bb_init(&bb, p->buf + sd_pos, 1);
     pg_decode_sequence_descriptor(&bb, &sd);
 
     if (sd.last_in_seq) {
@@ -176,10 +182,19 @@ static int _join_segment_fragments(struct pes_buffer_s *p)
     PES_BUFFER *next;
     while (NULL != (next = _find_segment_by_idv(p->next, p->buf[0], id_pos, p->buf + id_pos, id_len))) {
 
-        bb_init(&bb, next->buf + sd_pos, 3);
+        if (next->len < sd_pos + 1) {
+            /* invalid, incomplete header */
+            BD_DEBUG(DBG_DECODE|DBG_CRIT, "Missing header in segment 0x%02x, len=%u\n", type, next->len);
+            pes_buffer_remove(&p, next);
+            continue;
+        }
+
+        bb_init(&bb, next->buf + sd_pos, 1);
         pg_decode_sequence_descriptor(&bb, &sd);
 
-        _join_fragments(p, next, data_pos);
+        if (next->len > data_pos /* at least one byte of payload */) {
+            _join_fragments(p, next, data_pos);
+        }
 
         pes_buffer_remove(&p, next);
 
@@ -542,7 +557,7 @@ static int graphics_processor_decode_pes(PG_DISPLAY_SET **s, PES_BUFFER **p, int
             /* filter out values that seem to be incorrect (if stc is not updated) */
             int64_t diff = (*p)->dts - stc;
             if (diff < MAX_STC_DTS_DIFF) {
-                GP_TRACE("Segment dts > stc (%"PRId64" > %"PRId64" ; diff %"PRId64")\n",
+                GP_TRACE("Segment dts > stc (%" PRId64 " > %" PRId64 " ; diff %" PRId64 ")\n",
                          (*p)->dts, stc, diff);
                 return 0;
             }
@@ -562,7 +577,7 @@ static int graphics_processor_decode_pes(PG_DISPLAY_SET **s, PES_BUFFER **p, int
 
         /* decode segment */
 
-        GP_TRACE("Decoding segment, dts %010"PRId64" pts %010"PRId64" len %d\n",
+        GP_TRACE("Decoding segment, dts %010" PRId64 " pts %010" PRId64 " len %d\n",
                  (*p)->dts, (*p)->pts, (*p)->len);
 
         _decode_segment(*s, *p);

@@ -1,6 +1,6 @@
 /*
  * This file is part of libbluray
- * Copyright (C) 2014-2017  Petri Hintukainen <phintuka@users.sourceforge.net>
+ * Copyright (C) 2014-2026  Petri Hintukainen <phintuka@users.sourceforge.net>
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -26,6 +26,7 @@
 #include "dec.h"
 #include "properties.h"
 
+#include "util/refcnt.h"
 #include "util/logging.h"
 #include "util/macro.h"
 #include "util/mutex.h"
@@ -60,6 +61,14 @@ struct bd_disc {
     char         *properties_file;  /* NULL if not yet used */
 
     int8_t        avchd;  /* -1 - unknown. 0 - no. 1 - yes */
+
+    /* disc cache */
+    BD_MUTEX        cache_mutex;
+    size_t          cache_size;
+    struct {
+        char        name[11];
+        const void *data;
+    } *cache;
 };
 
 /*
@@ -271,6 +280,7 @@ static BD_DISC *_disc_init()
     if (p) {
         bd_mutex_init(&p->ovl_mutex);
         bd_mutex_init(&p->properties_mutex);
+        bd_mutex_init(&p->cache_mutex);
 
         /* default file access functions */
         p->fs_handle          = (void*)p;
@@ -321,16 +331,16 @@ BD_DISC *disc_open(const char *device_path,
 #ifdef ENABLE_UDF
     BD_DIR_H *dp_img = device_path ? dir_open(device_path) : NULL;
     if (!dp_img) {
-        void *udf = udf_image_open(device_path, p_fs ? p_fs->fs_handle : NULL, p_fs ? p_fs->read_blocks : NULL);
+        void *udf = bdpriv_udf_image_open(device_path, p_fs ? p_fs->fs_handle : NULL, p_fs ? p_fs->read_blocks : NULL);
         if (!udf) {
             BD_DEBUG(DBG_FILE | DBG_CRIT, "failed opening UDF image %s\n", device_path);
         } else {
             p->fs_handle          = udf;
-            p->pf_fs_close        = udf_image_close;
-            p->pf_file_open_bdrom = udf_file_open;
-            p->pf_dir_open_bdrom  = udf_dir_open;
+            p->pf_fs_close        = bdpriv_udf_image_close;
+            p->pf_file_open_bdrom = bdpriv_udf_file_open;
+            p->pf_dir_open_bdrom  = bdpriv_udf_dir_open;
 
-            p->udf_volid = udf_volume_id(udf);
+            p->udf_volid = bdpriv_udf_volume_id(udf);
 
             /* root not accessible with stdio */
             X_FREE(p->disc_root);
@@ -342,7 +352,7 @@ BD_DISC *disc_open(const char *device_path,
 #endif
 
     struct dec_dev dev = { p->fs_handle, p->pf_file_open_bdrom, p, (file_openFp)disc_open_path, p->disc_root, device_path };
-    p->dec = dec_init(&dev, enc_info, keyfile_path, regs, psr_read, psr_write);
+    p->dec = bdpriv_dec_init(&dev, enc_info, keyfile_path, regs, psr_read, psr_write);
 
     return p;
 }
@@ -352,14 +362,17 @@ void disc_close(BD_DISC **pp)
     if (pp && *pp) {
         BD_DISC *p = *pp;
 
-        dec_close(&p->dec);
+        bdpriv_dec_close(&p->dec);
 
         if (p->pf_fs_close) {
             p->pf_fs_close(p->fs_handle);
         }
 
+        disc_cache_clean(p, NULL);
+
         bd_mutex_destroy(&p->ovl_mutex);
         bd_mutex_destroy(&p->properties_mutex);
+        bd_mutex_destroy(&p->cache_mutex);
 
         X_FREE(p->disc_root);
         X_FREE(p->properties_file);
@@ -598,7 +611,7 @@ static char *_properties_file(BD_DISC *p)
     /* get disc ID */
     if (p->dec) {
         id_type = 'A';
-        disc_id = dec_disc_id(p->dec);
+        disc_id = bdpriv_dec_disc_id(p->dec);
     }
     if (!disc_id) {
         id_type = 'P';
@@ -644,7 +657,7 @@ int disc_property_put(BD_DISC *p, const char *property, const char *val)
     }
 
     bd_mutex_lock(&p->properties_mutex);
-    result = properties_put(p->properties_file, property, val);
+    result = bdpriv_properties_put(p->properties_file, property, val);
     bd_mutex_unlock(&p->properties_mutex);
 
     return result;
@@ -659,7 +672,7 @@ char *disc_property_get(BD_DISC *p, const char *property)
     }
 
     bd_mutex_lock(&p->properties_mutex);
-    result = properties_get(p->properties_file, property);
+    result = bdpriv_properties_get(p->properties_file, property);
     bd_mutex_unlock(&p->properties_mutex);
 
     return result;
@@ -669,15 +682,10 @@ char *disc_property_get(BD_DISC *p, const char *property)
  * streams
  */
 
-BD_FILE_H *disc_open_stream(BD_DISC *disc, const char *file)
+static BD_FILE_H *_open_stream(BD_DISC *disc, BD_FILE_H *fp, const char *file)
 {
-    BD_FILE_H *fp = disc_open_file(disc, "BDMV" DIR_SEP "STREAM", file);
-    if (!fp) {
-        return NULL;
-    }
-
     if (disc->dec) {
-        BD_FILE_H *st = dec_open_stream(disc->dec, fp, atoi(file));
+        BD_FILE_H *st = bdpriv_dec_open_stream(disc->dec, fp, atoi(file));
         if (st) {
             return st;
         }
@@ -686,10 +694,47 @@ BD_FILE_H *disc_open_stream(BD_DISC *disc, const char *file)
     return fp;
 }
 
+BD_FILE_H *disc_open_stream(BD_DISC *disc, const char *file)
+{
+    BD_FILE_H *fp = disc_open_file(disc, "BDMV" DIR_SEP "STREAM", file);
+
+    return fp ? _open_stream(disc, fp, file) : fp;
+}
+
+BD_FILE_H *disc_open_path_dec(BD_DISC *p, const char *rel_path)
+{
+    BD_FILE_H *fp = disc_open_path(p, rel_path);
+    if (!fp) {
+        return NULL;
+    }
+
+    for (; *rel_path == DIR_SEP_CHAR; rel_path++) ;
+
+    /* check if it's a stream */
+    if (!strncmp(rel_path, "BDMV" DIR_SEP "STREAM", 11)) {
+        const char *suf = rel_path + (strlen(rel_path) - 5);
+        if (!strcmp(suf, ".m2ts")) { // equal
+            fp = _open_stream(p, fp, suf - 5);
+        } else if (!strcmp(suf+1, ".MTS")) { // equal
+            fp = _open_stream(p, fp, suf - 4);
+        } else if (!strcmp(suf, ".ssif")) { // equal
+            fp = _open_stream(p, fp, suf - 5);
+        } else {
+            BD_DEBUG(DBG_FILE | DBG_CRIT, "unsupported stream file extension in %s\n", rel_path);
+        }
+    }
+
+    return fp;
+}
+
+/*
+ *
+ */
+
 const uint8_t *disc_get_data(BD_DISC *disc, int type)
 {
     if (disc->dec) {
-        return dec_data(disc->dec, type);
+        return bdpriv_dec_data(disc->dec, type);
     }
     if (type == 0x1000) {
         /* this shouldn't cause any extra optical disc access */
@@ -708,13 +753,13 @@ void disc_event(BD_DISC *disc, uint32_t event, uint32_t param)
     if (disc && disc->dec) {
         switch (event) {
             case DISC_EVENT_START:
-                dec_start(disc->dec, param);
+                bdpriv_dec_start(disc->dec, param);
                 return;
             case DISC_EVENT_TITLE:
-                dec_title(disc->dec, param);
+                bdpriv_dec_title(disc->dec, param);
                 return;
             case DISC_EVENT_APPLICATION:
-                dec_application(disc->dec, param);
+                bdpriv_dec_application(disc->dec, param);
                 return;
         }
     }
@@ -806,4 +851,106 @@ int disc_pseudo_id(BD_DISC *p, uint8_t *id/*[20]*/)
     }
 
     return r > 0;
+}
+
+/*
+ *
+ */
+
+const void *disc_cache_get(BD_DISC *p, const char *name)
+{
+    const void *data = NULL;
+
+    bd_mutex_lock(&p->cache_mutex);
+    if (p->cache) {
+        size_t i;
+        for (i = 0; p->cache[i].data; i++) {
+            if (!strcmp(p->cache[i].name, name)) {
+                data = refcnt_inc(p->cache[i].data);
+                break;
+            }
+        }
+    }
+    bd_mutex_unlock(&p->cache_mutex);
+
+    return data;
+}
+
+void disc_cache_put(BD_DISC *p, const char *name, const void *data)
+{
+    if (strlen(name) >= sizeof(p->cache[0].name)) {
+        BD_DEBUG(DBG_FILE|DBG_CRIT, "disc_cache_put: key %s too large\n", name);
+        return;
+    }
+    if (!data) {
+        BD_DEBUG(DBG_FILE|DBG_CRIT, "disc_cache_put: NULL for key %s ignored\n", name);
+        return;
+    }
+
+    bd_mutex_lock(&p->cache_mutex);
+
+    if (!p->cache) {
+        p->cache_size = 128;
+        p->cache = calloc(p->cache_size, sizeof(*p->cache));
+    }
+
+    if (p->cache && p->cache[p->cache_size - 2].data) {
+        void *tmp = realloc(p->cache, 2 * p->cache_size * sizeof(p->cache[0]));
+        if (tmp) {
+            p->cache = tmp;
+            memset(&p->cache[p->cache_size], 0, p->cache_size * sizeof(p->cache[0]));
+            p->cache_size *= 2;
+        }
+    }
+
+    if (p->cache && !p->cache[p->cache_size - 2].data) {
+        size_t i;
+        for (i = 0; p->cache[i].data; i++) {
+            if (!strcmp(p->cache[i].name, name)) {
+                BD_DEBUG(DBG_FILE|DBG_CRIT, "disc_cache_put(): duplicate key %s\n", name);
+                refcnt_dec(p->cache[i].data);
+                break;
+            }
+        }
+        strcpy(p->cache[i].name, name);
+        p->cache[i].data = refcnt_inc(data);
+        if (p->cache[i].data) {
+            BD_DEBUG(DBG_FILE, "disc_cache_put: added %s (%p)\n", name, data);
+        } else {
+            BD_DEBUG(DBG_FILE|DBG_CRIT, "disc_cache_put: error adding %s (%p): Invalid object type\n", name, data);
+        }
+    } else {
+        BD_DEBUG(DBG_FILE|DBG_CRIT, "disc_cache_put: error adding %s (%p): Out of memory\n", name, data);
+    }
+
+    bd_mutex_unlock(&p->cache_mutex);
+}
+
+void disc_cache_clean(BD_DISC *p, const char *name)
+{
+    bd_mutex_lock(&p->cache_mutex);
+
+    if (p->cache) {
+        size_t i;
+        if (name == NULL) {
+            for (i = 0; p->cache[i].data; i++) {
+                refcnt_dec(p->cache[i].data);
+            }
+            X_FREE(p->cache);
+            p->cache_size = 0;
+        } else {
+            for (i = 0; p->cache[i].data; i++) {
+                if (!strcmp(p->cache[i].name, name)) {
+                    BD_DEBUG(DBG_FILE, "disc_cache_clean: dropped %s (%p)\n", name, p->cache[i].data);
+                    refcnt_dec(p->cache[i].data);
+                    break;
+                }
+            }
+            for (; p->cache[i].data; i++) {
+                p->cache[i] = p->cache[i + 1];
+            }
+        }
+    }
+
+    bd_mutex_unlock(&p->cache_mutex);
 }

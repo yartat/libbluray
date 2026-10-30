@@ -28,6 +28,7 @@
 #include "util/logging.h"
 #include "util/bits.h"
 
+#include <inttypes.h>
 #include <string.h>
 #include <stdlib.h>
 
@@ -122,14 +123,17 @@ int pg_decode_palette(BITBUFFER *bb, BD_PG_PALETTE *p)
 static int _decode_rle(BITBUFFER *bb, BD_PG_OBJECT *p)
 {
     BD_PG_RLE_ELEM *tmp;
-    int pixels_left = p->width * p->height;
+    int64_t pixels_left = (int64_t)p->width * p->height;
+    int rle_size        = (int)(pixels_left / 4);
     int num_rle     = 0;
-    int rle_size    = p->width * p->height / 4;
 
     if (rle_size < 1)
         rle_size = 1;
 
-    tmp = refcnt_realloc(p->img, rle_size * sizeof(BD_PG_RLE_ELEM));
+    if (rle_size > 65536)
+        rle_size = 65536;
+
+    tmp = refcnt_realloc(p->img, rle_size * sizeof(BD_PG_RLE_ELEM), NULL);
     if (!tmp) {
         BD_DEBUG(DBG_DECODE | DBG_CRIT, "pg_decode_object(): realloc failed\n");
         return 0;
@@ -163,14 +167,14 @@ static int _decode_rle(BITBUFFER *bb, BD_PG_OBJECT *p)
         pixels_left -= len;
 
         if (pixels_left < 0) {
-            BD_DEBUG(DBG_DECODE, "pg_decode_object(): too many pixels (%d)\n", -pixels_left);
+            BD_DEBUG(DBG_DECODE, "pg_decode_object(): too many pixels (%" PRId64 ")\n", -pixels_left);
             return 0;
         }
 
         num_rle++;
         if (num_rle >= rle_size) {
             rle_size *= 2;
-            tmp = refcnt_realloc(p->img, rle_size * sizeof(BD_PG_RLE_ELEM));
+            tmp = refcnt_realloc(p->img, rle_size * sizeof(BD_PG_RLE_ELEM), NULL);
             if (!tmp) {
                 BD_DEBUG(DBG_DECODE | DBG_CRIT, "pg_decode_object(): realloc failed\n");
                 return 0;
@@ -180,7 +184,7 @@ static int _decode_rle(BITBUFFER *bb, BD_PG_OBJECT *p)
     }
 
     if (pixels_left > 0) {
-        BD_DEBUG(DBG_DECODE, "pg_decode_object(): missing %d pixels\n", pixels_left);
+        BD_DEBUG(DBG_DECODE, "pg_decode_object(): missing %" PRId64 " pixels\n", pixels_left);
         return 0;
     }
 

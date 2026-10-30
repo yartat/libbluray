@@ -157,6 +157,10 @@ public class BDFramePeer extends BDComponentPeer implements FramePeer
         return true;
     }
 
+    public GraphicsConfiguration getAppropriateGraphicsConfiguration(GraphicsConfiguration gc) {
+        return gc;
+    }
+
     //
     // ComponentPeer
     //
@@ -173,13 +177,13 @@ public class BDFramePeer extends BDComponentPeer implements FramePeer
         return ((BDToolkit)BDToolkit.getDefaultToolkit()).createImage((Component)null, width, height);
     }
 
-//    /* Java >= 9 */ Team Mediaportal Removed for Build java part
-//    public boolean requestFocus(Component c/*lightweightChild*/, boolean a/*temporary*/,
-//                                boolean b/*focusedWindowChangeAllowed*/, long l/*time*/,
-//                                java.awt.event.FocusEvent.Cause cause
-//                                ) {
-//        return requestFocusHelper(c, a, b, l);
-//    }
+    /* Java >= 9 */
+    public boolean requestFocus(Component c/*lightweightChild*/, boolean a/*temporary*/,
+                                boolean b/*focusedWindowChangeAllowed*/, long l/*time*/,
+                                java.awt.event.FocusEvent.Cause cause
+                                ) {
+        return requestFocusHelper(c, a, b, l);
+    }
 
     /* Java < 9 */
     public boolean requestFocus(Component c, boolean a, boolean b, long l, sun.awt.CausedFocusEvent.Cause d) {

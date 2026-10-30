@@ -634,8 +634,20 @@ static void _render_composition_object(GRAPHICS_CONTROLLER *gc,
 
         gc->overlay_proc(gc->overlay_proc_handle, &ov);
 
-        bd_refcnt_dec(cropped_img);
+        refcnt_dec(cropped_img);
     }
+}
+
+/* exported */
+const void *bd_refcnt_inc(const void *obj)
+{
+    return refcnt_inc(obj);
+}
+
+/* exported */
+void bd_refcnt_dec(const void *obj)
+{
+    refcnt_dec(obj);
 }
 
 static void _render_rle(GRAPHICS_CONTROLLER *gc,
@@ -747,7 +759,7 @@ static void _gc_reset(GRAPHICS_CONTROLLER *gc)
 /*
  * register hook
  */
-static void _process_psr_event(void *handle, BD_PSR_EVENT *ev)
+static void _process_psr_event(void *handle, const BD_PSR_EVENT *ev)
 {
     GRAPHICS_CONTROLLER *gc = (GRAPHICS_CONTROLLER *)handle;
 
@@ -1027,7 +1039,7 @@ static int _render_textst(GRAPHICS_CONTROLLER *p, uint32_t stc, GC_NAV_CMDS *cmd
 
         /* next dialog too far in future ? */
         if (now < 1 || dialog[ii].start_pts >= now + 90000) {
-            GC_TRACE("_render_textst(): next event #%d in %"PRId64" seconds (pts %"PRId64")\n",
+            GC_TRACE("_render_textst(): next event #%d in %" PRId64 " seconds (pts %" PRId64 ")\n",
                      ii, (dialog[ii].start_pts - now)/90000, dialog[ii].start_pts);
             if (cmds) {
                 cmds->wakeup_time = (uint32_t)(dialog[ii].start_pts / 2);
@@ -1052,7 +1064,7 @@ static int _render_textst(GRAPHICS_CONTROLLER *p, uint32_t stc, GC_NAV_CMDS *cmd
             continue;
         }
 
-        GC_TRACE("_render_textst(): rendering dialog #%d (pts %"PRId64", diff %"PRId64"\n",
+        GC_TRACE("_render_textst(): rendering dialog #%d (pts %" PRId64 ", diff %" PRId64 "\n",
                  ii, dialog[ii].start_pts, dialog[ii].start_pts - now);
 
 
@@ -2048,7 +2060,11 @@ int gc_run(GRAPHICS_CONTROLLER *gc, gc_ctrl_e ctrl, uint32_t param, GC_NAV_CMDS 
         case GC_CTRL_MOUSE_MOVE:
             result = _mouse_move(gc, param >> 16, param & 0xffff, cmds);
             break;
-
+#ifndef __COVERITY__
+        /* no "default:" :
+         * this chunk is used to trigger a warning when a new enum value is added,
+         * but not handled here.
+         */
         case GC_CTRL_RESET:
         case GC_CTRL_PG_RESET:
         case GC_CTRL_PG_UPDATE:
@@ -2056,6 +2072,7 @@ int gc_run(GRAPHICS_CONTROLLER *gc, gc_ctrl_e ctrl, uint32_t param, GC_NAV_CMDS 
         case GC_CTRL_STYLE_SELECT:
             /* already handled */
             break;
+#endif
     }
 
     if (cmds) {

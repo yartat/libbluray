@@ -50,6 +50,8 @@ import javax.media.TimeBase;
 import javax.media.TransitionEvent;
 import javax.media.protocol.DataSource;
 
+import org.davic.media.MediaPresentedEvent;
+
 import javax.tv.locator.Locator;
 import javax.tv.service.selection.ServiceContentHandler;
 
@@ -248,7 +250,7 @@ public abstract class BDHandler implements Player, ServiceContentHandler {
     public float setRate(float factor) {
         checkUnrealized();
 
-        PlayerAction action = new PlayerAction(this, PlayerAction.ACTION_SET_RATE, new Float(factor));
+        PlayerAction action = new PlayerAction(this, PlayerAction.ACTION_SET_RATE, Float.valueOf(factor));
         commandQueue.put(action);
         action.waitEnd();
         return rate;
@@ -340,7 +342,7 @@ public abstract class BDHandler implements Player, ServiceContentHandler {
 
     protected boolean statusEvent(int event, int param) {
         if (isClosed) return false;
-        commandQueue.put(new PlayerAction(this, PlayerAction.ACTION_STATUS, new Integer(event), param));
+        commandQueue.put(new PlayerAction(this, PlayerAction.ACTION_STATUS, Integer.valueOf(event), param));
         return true;
     }
 
@@ -522,6 +524,8 @@ public abstract class BDHandler implements Player, ServiceContentHandler {
             if (error == null) {
                 state = Started;
                 notifyListeners(new StartEvent(this, Prefetched, Started, Started, at, getMediaTime()));
+                // Send MediaPresentedEvent after StartEvent - some discs rely on this to show menus
+                notifyListeners(new MediaPresentedEvent(this));
             } else {
                 notifyListeners(error);
                 return false;

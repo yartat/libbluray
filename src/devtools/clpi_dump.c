@@ -72,6 +72,15 @@ _show_stream(CLPI_PROG_STREAM *ss, int level)
             indent_printf(level, "Aspect %02x: %s", ss->aspect,
                         _lookup_str(video_aspect_map, ss->aspect));
             indent_printf(level, "oc_flag %02x", ss->oc_flag);
+            if (ss->coding_type == 0x24) {
+                indent_printf(level, "cr_flag %02x", ss->cr_flag);
+                indent_printf(level, "Dynamic Range type %02x: %s", ss->dynamic_range_type,
+                            _lookup_str(dynamic_range_type_map, ss->dynamic_range_type));
+                indent_printf(level, "Color Space %02x: %s", ss->color_space,
+                            _lookup_str(color_space_map, ss->color_space));
+                indent_printf(level, "HDR10+ %02x: %s", ss->hdr_plus_flag,
+                            ss->hdr_plus_flag ? "Yes" : "No");
+            }
             break;
 
         case 0x03:
@@ -165,9 +174,9 @@ _show_seq_info(CLPI_SEQ_INFO *si, int level)
             indent_printf(level+2, "ATC Sequence %d", jj);
             indent_printf(level+3, "SPN STC Start: %u", stc->spn_stc_start);
             indent_printf(level+3, "PCR PID: %04x", stc->pcr_pid);
-            indent_printf(level+3, "Presentation Start: %u", 
+            indent_printf(level+3, "Presentation Start: %u",
                             stc->presentation_start_time);
-            indent_printf(level+3, "Presentation End: %u", 
+            indent_printf(level+3, "Presentation End: %u",
                             stc->presentation_end_time);
         }
     }
@@ -184,7 +193,7 @@ _show_prog_info(CLPI_PROG_INFO *pi, int level)
     for (ii = 0; ii < pi->num_prog; ii++) {
         prog = &pi->progs[ii];
         indent_printf(level+1, "Program %d", ii);
-        indent_printf(level+2, "SPN Program Sequence Start: %d", 
+        indent_printf(level+2, "SPN Program Sequence Start: %d",
                         prog->spn_program_sequence_start);
         indent_printf(level+2, "Program Map PID: %d", prog->program_map_pid);
         indent_printf(level+2, "Number Streams: %d", prog->num_streams);
@@ -234,7 +243,7 @@ _show_cpi_info(CLPI_CPI *cpi, int level)
         indent_printf(level+2, "EP Stream Type: %d", entry->ep_stream_type);
         indent_printf(level+2, "Number EP Coarse: %d", entry->num_ep_coarse);
         indent_printf(level+2, "Number EP Fine: %d", entry->num_ep_fine);
-        indent_printf(level+2, "EP Map Start: %d", 
+        indent_printf(level+2, "EP Map Start: %d",
                         entry->ep_map_stream_start_addr);
         for (jj = 0; jj < entry->num_ep_coarse; jj++) {
             coarse = &entry->coarse[jj];
@@ -246,9 +255,9 @@ _show_cpi_info(CLPI_CPI *cpi, int level)
         for (jj = 0; jj < entry->num_ep_fine; jj++) {
             fine = &entry->fine[jj];
             indent_printf(level+2, "Fine: %d", jj);
-            indent_printf(level+3, "Angle Change Point: %s", 
+            indent_printf(level+3, "Angle Change Point: %s",
                 fine->is_angle_change_point ? "True":"False");
-            indent_printf(level+3, "I End Offset: %d", 
+            indent_printf(level+3, "I End Offset: %d",
                 fine->i_end_position_offset);
             indent_printf(level+3, "PTS EP: %d", fine->pts_ep);
             indent_printf(level+3, "SPN EP: %d", fine->spn_ep);
@@ -274,7 +283,7 @@ _show_cpi_info(CLPI_CPI *cpi, int level)
                     pts = ((uint64_t) (coarse->pts_ep & ~0x01) << 19) +
                             ((uint64_t)fine->pts_ep << 9);
                     spn = (coarse->spn_ep & ~0x1FFFF) + fine->spn_ep;
-                    indent_printf(level+4, "PTS %8"PRIu64"/%8"PRIu64" -- SPN %u",
+                    indent_printf(level+4, "PTS %8" PRIu64 "/%8" PRIu64 " -- SPN %u",
                         pts, pts >> 1, spn);
                 }
             }
@@ -286,8 +295,8 @@ _show_cpi_info(CLPI_CPI *cpi, int level)
 static void
 _usage(char *cmd)
 {
-    fprintf(stderr, 
-"Usage: %s -vcspi <clpi file> [<clpi file> ...]\n"
+    fprintf(stderr,
+"Usage: %s [options] <clpi file> [<clpi file> ...]\n"
 "With no options, produces no output (not very useful)\n"
 "Options:\n"
 "    v - Verbose output.\n"

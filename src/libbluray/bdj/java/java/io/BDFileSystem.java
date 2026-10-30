@@ -51,6 +51,26 @@ public abstract class BDFileSystem extends FileSystem {
 
     static {
         try {
+            /* Workaround for Java 9 bootstrap issues:
+             * In some Java 9 versions this methods is called in VM init phase1
+             * before setJavaLangAccess() -> getDeclaredMethod() crashes in StringJoiner
+             */
+            String v = System.getProperty("java.version");
+            int i = 0;
+            if (v.startsWith("1."))
+                v = v.substring(2, 3);
+            if (v.indexOf(".") != -1)
+                v = v.substring(0, v.indexOf("."));
+            if (v.indexOf("-") != -1)
+                v = v.substring(0, v.indexOf("-"));
+            try {
+                i = Integer.parseInt(v);
+            } catch (Throwable t) {
+                i = 0;
+            }
+            if (i >= 8)
+                throw new Exception("java>7");
+
             /* Java < 8 */
             nativeFileSystem = (FileSystem)FileSystem.class
                 .getDeclaredMethod("getFileSystem",new Class[0])
@@ -94,10 +114,10 @@ public abstract class BDFileSystem extends FileSystem {
             });
     }
 
-    private static void init0(Class c) {
-        Field filesystem;
-        try {
-            filesystem = c.getDeclaredField("fs");
+    private static void init0(Class c, String field_name)
+        throws NoSuchFieldException, IllegalAccessException {
+
+            Field filesystem = c.getDeclaredField(field_name);
             filesystem.setAccessible(true);
 
             FileSystem fs = (FileSystem)filesystem.get(null);
@@ -111,8 +131,17 @@ public abstract class BDFileSystem extends FileSystem {
                 //modifiersField.setInt(filesystem, filesystem.getModifiers() & ~Modifier.FINAL);
                 filesystem.set(null, new BDFileSystemImpl(fs));
             }
-        } catch (Exception t) {
-            error("Hooking FileSystem class failed: " + t);
+    }
+
+    private static void init0(Class c) {
+        try {
+            init0(c, "FS");
+        } catch (Exception t0) {
+            try {
+                init0(c, "fs");
+            } catch (Exception t1) {
+                error("Hooking FileSystem class failed: " + t0 + ", " + t1);
+            }
         }
     }
 
@@ -189,7 +218,7 @@ public abstract class BDFileSystem extends FileSystem {
 
         String resolvedPath = fs.resolve(parent, child);
         String cachePath = BDJLoader.getCachedFile(resolvedPath);
-        if (cachePath != resolvedPath) {
+        if (!cachePath.equals(resolvedPath)) {
             logger.info("resolve(p,c): using cached " + cachePath + " (" + resolvedPath + ")");
         }
         return cachePath;
@@ -207,6 +236,19 @@ public abstract class BDFileSystem extends FileSystem {
         return fs.isAbsolute(f);
     }
 
+    public boolean isInvalid(File f) {
+        boolean res = false;
+        try {
+            Method m = fs.getClass().getDeclaredMethod("isInvalid", new Class[] { File.class });
+            Object[] args = new Object[] {(Object)f};
+            Boolean result = (Boolean)m.invoke(fs, args);
+            res = result.booleanValue();
+        } finally {
+            /* return here will drop all exceptions from try block (and override possible return value from try block) */
+            return res;
+        }
+    }
+
     public String resolve(File f) {
         if (!booted)
             return fs.resolve(f);
@@ -218,7 +260,7 @@ public abstract class BDFileSystem extends FileSystem {
 
         String resolvedPath = fs.resolve(f);
         String cachePath = BDJLoader.getCachedFile(resolvedPath);
-        if (cachePath != resolvedPath) {
+        if (!cachePath.equals(resolvedPath)) {
             logger.info("resolve(f): using cached " + cachePath + " (" + resolvedPath + ")");
         }
         return cachePath;
@@ -230,7 +272,7 @@ public abstract class BDFileSystem extends FileSystem {
 
         String canonPath = fs.canonicalize(path);
         String cachePath = BDJLoader.getCachedFile(canonPath);
-        if (cachePath != canonPath) {
+        if (!cachePath.equals(canonPath)) {
             logger.info("canonicalize(): Using cached " + cachePath + " for " + canonPath + "(" + path + ")");
         }
         return cachePath;
@@ -312,7 +354,7 @@ public abstract class BDFileSystem extends FileSystem {
                 args = new Object[] {(Object)path};
             } catch (NoSuchMethodException e) {
                 m  = fs.getClass().getDeclaredMethod("createFileExclusively", new Class[] { String.class, boolean.class });
-                args = new Object[] {(Object)path, (Object)new Boolean(restrictive)};
+                args = new Object[] {(Object)path, (Object)Boolean.valueOf(restrictive)};
             }
         } catch (NoSuchMethodException e) {
             error("no matching FileSystem.createFileExclusively found !");

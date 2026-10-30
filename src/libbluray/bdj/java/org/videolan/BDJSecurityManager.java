@@ -33,6 +33,7 @@ final class BDJSecurityManager extends SecurityManager {
     private String budaRoot;
     private String persistentRoot;
     private boolean usingUdf = false;
+    private int javaMajor;
 
     private static Class urlPermission = null;
     static {
@@ -43,11 +44,12 @@ final class BDJSecurityManager extends SecurityManager {
         }
     }
 
-    BDJSecurityManager(String discRoot, String persistentRoot, String budaRoot) {
+    BDJSecurityManager(String discRoot, String persistentRoot, String budaRoot, int javaMajor) {
         this.discRoot  = discRoot;
         this.cacheRoot = null;
         this.budaRoot  = budaRoot;
         this.persistentRoot = persistentRoot;
+        this.javaMajor = javaMajor;
         if (discRoot == null) {
             usingUdf = true;
         }
@@ -85,6 +87,13 @@ final class BDJSecurityManager extends SecurityManager {
         throw new SecurityException("denied " + perm);
     }
 
+    private void checkNet(Permission perm) {
+        String enable = System.getProperty("bluray.network.connected");
+        if (enable != null && enable.equals("YES"))
+            return;
+        deny(perm);
+    }
+
     public void checkPermission(Permission perm) {
         if (perm instanceof RuntimePermission) {
             if (perm.implies(new RuntimePermission("createSecurityManager"))) {
@@ -97,7 +106,12 @@ final class BDJSecurityManager extends SecurityManager {
                 deny(perm);
             }
             if (perm.implies(new RuntimePermission("setSecurityManager"))) {
-                if (classDepth0("org.videolan.Libbluray") == 3) {
+
+                // Starting Java 17, the depth callback of setSecurityManager has changed as
+                // it now includes implSetSecurityManager . As we do not want the Xlets to
+                // be able to disable sandboxing we do check at runtime the Java version and
+                // then change the depth callback as needed below.
+                if ((classDepth0("org.videolan.Libbluray") == 3) || ((classDepth0("org.videolan.Libbluray") == 4) && (this.javaMajor > 16))) {
                     return;
                 }
                 deny(perm);
@@ -164,6 +178,17 @@ final class BDJSecurityManager extends SecurityManager {
         /* Networking */
         else if (perm instanceof java.net.SocketPermission) {
             if (new java.net.SocketPermission("*", "connect,resolve").implies(perm)) {
+                checkNet(perm);
+                return;
+            }
+            if (new java.net.SocketPermission("*", "listen,resolve").implies(perm)) {
+                checkNet(perm);
+                return;
+            }
+        }
+        else if (perm instanceof java.net.NetPermission) {
+            if (new java.net.NetPermission("*", "getNetworkInformation").implies(perm)) {
+                checkNet(perm);
                 return;
             }
         }
@@ -223,7 +248,7 @@ final class BDJSecurityManager extends SecurityManager {
      * Allow package access (Java 11)
      */
 
-    private static String pkgPrefixes[] = {
+    private static final String pkgPrefixes[] = {
         "javax.media" ,
         "javax.tv",
         "javax.microedition",
@@ -234,11 +259,17 @@ final class BDJSecurityManager extends SecurityManager {
         "org.blurayx",
         "com.aacsla.bluray",
     };
+    private static final String pkgs[] = {
+        "org.videolan.backdoor",
+    };
 
     public void checkPackageAccess(String pkg) {
 
         for (int i = 0; i < pkgPrefixes.length; i++)
             if (pkg.startsWith(pkgPrefixes[i]))
+                return;
+        for (int i = 0; i < pkgs.length; i++)
+            if (pkg.equals(pkgs[i]))
                 return;
 
         super.checkPackageAccess(pkg);

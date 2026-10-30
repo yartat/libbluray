@@ -31,6 +31,7 @@
 #include "disc/disc.h"
 
 #include "file/file.h"
+#include "util/refcnt.h"
 #include "util/bits.h"
 #include "util/macro.h"
 #include "util/logging.h"
@@ -54,6 +55,7 @@ _parse_stream_attr(BITSTREAM *bits, CLPI_PROG_STREAM *ss)
     pos = bs_pos(bits) >> 3;
 
     ss->lang[0] = '\0';
+    memset(ss->isrc,'\0',12);
     ss->coding_type = bs_read(bits, 8);
     switch (ss->coding_type) {
         case 0x01:
@@ -67,7 +69,15 @@ _parse_stream_attr(BITSTREAM *bits, CLPI_PROG_STREAM *ss)
             ss->aspect = bs_read(bits, 4);
             bs_skip(bits, 2);
             ss->oc_flag = bs_read(bits, 1);
-            bs_skip(bits, 1);
+            if (ss->coding_type == 0x24) {
+                ss->cr_flag = bs_read(bits, 1);
+                ss->dynamic_range_type = bs_read(bits, 4);
+                ss->color_space = bs_read(bits, 4);
+                ss->hdr_plus_flag = bs_read(bits, 1);
+                bs_skip(bits, 7);
+            } else {
+                bs_skip(bits, 17);
+            }
             break;
 
         case 0x03:
@@ -90,6 +100,7 @@ _parse_stream_attr(BITSTREAM *bits, CLPI_PROG_STREAM *ss)
         case 0x91:
         case 0xa0:
             bs_read_string(bits, ss->lang, 3);
+            bs_skip(bits, 8);
             break;
 
         case 0x92:
@@ -102,6 +113,7 @@ _parse_stream_attr(BITSTREAM *bits, CLPI_PROG_STREAM *ss)
             break;
     };
     ss->lang[3] = '\0';
+    bs_read_bytes(bits, ss->isrc, 12);
 
     // Skip over any padding
     if (bs_seek_byte(bits, pos + len) < 0) {
@@ -326,11 +338,17 @@ _parse_ep_map_stream(BITSTREAM *bits, CLPI_EP_MAP_ENTRY *ee)
     }
     for (ii = 0; ii < ee->num_ep_coarse; ii++) {
         coarse[ii].ref_ep_fine_id = bs_read(bits, 18);
+        if (coarse[ii].ref_ep_fine_id >= ee->num_ep_fine) {
+            BD_DEBUG(DBG_HDMV | DBG_CRIT, "clpi_parse: invalid EP fine reference %u\n", coarse[ii].ref_ep_fine_id);
+            if (ee->num_ep_fine > 0) {
+                coarse[ii].ref_ep_fine_id = ee->num_ep_fine - 1;
+            }
+        }
         coarse[ii].pts_ep         = bs_read(bits, 14);
         coarse[ii].spn_ep         = bs_read(bits, 32);
     }
 
-    if (bs_seek_byte(bits, ee->ep_map_stream_start_addr+fine_start) < 0) {
+    if (bs_seek_byte(bits, (int64_t)ee->ep_map_stream_start_addr+fine_start) < 0) {
         return 0;
     }
 
@@ -414,7 +432,8 @@ clpi_find_stc_spn(const CLPI_CL *cl, uint8_t stc_id)
 
     for (ii = 0; ii < cl->sequence.num_atc_seq; ii++) {
         atc = &cl->sequence.atc_seq[ii];
-        if (stc_id < atc->offset_stc_id + atc->num_stc_seq) {
+        if (stc_id >= atc->offset_stc_id &&
+            stc_id < atc->offset_stc_id + atc->num_stc_seq) {
             return atc->stc_seq[stc_id - atc->offset_stc_id].spn_stc_start;
         }
     }
@@ -444,6 +463,13 @@ clpi_lookup_spn(const CLPI_CL *cl, uint32_t timestamp, int before, uint8_t stc_i
 
     // Assumes that there is only one pid of interest
     entry = &cpi->entry[0];
+
+    if (entry->num_ep_fine < 1) {
+        if (before) {
+            return 0;
+        }
+        return cl->clip.num_source_packets;
+    }
 
     // Use sequence info to find spn_stc_start before doing
     // PTS search. The spn_stc_start defines the point in
@@ -523,6 +549,9 @@ done:
         }
         jj = entry->coarse[ii].ref_ep_fine_id;
     }
+    if (jj < 0) {
+        jj = 0;
+    }
     spn = (entry->coarse[ii].spn_ep & ~0x1FFFF) + entry->fine[jj].spn_ep;
     return spn;
 }
@@ -539,6 +568,11 @@ clpi_access_point(const CLPI_CL *cl, uint32_t pkt, int next, int angle_change, u
     uint32_t coarse_spn, spn;
     int start, end;
     int ref;
+
+    if (cpi->num_stream_pid < 1 || !cpi->entry) {
+        *time = 0;
+        return 0;
+    }
 
     // Assumes that there is only one pid of interest
     entry = &cpi->entry[0];
@@ -575,7 +609,9 @@ clpi_access_point(const CLPI_CL *cl, uint32_t pkt, int next, int angle_change, u
         ii++;
         jj = 0;
     } else if (spn != pkt && !next) {
-        jj--;
+        if (jj > 0) {
+            jj--;
+        }
     }
     if (ii == entry->num_ep_coarse) {
         *time = 0;
@@ -696,8 +732,9 @@ _clean_cpi(CLPI_CPI *cpi)
 }
 
 static void
-_clpi_free(CLPI_CL *cl)
+_clpi_clean(void *p)
 {
+    CLPI_CL *cl = p;
     int ii;
 
     X_FREE(cl->clip.atc_delta);
@@ -718,8 +755,21 @@ _clpi_free(CLPI_CL *cl)
 
     _clean_program(&cl->program_ss);
     _clean_cpi(&cl->cpi_ss);
+}
 
-    X_FREE(cl);
+static void
+_clpi_free(const CLPI_CL *cl)
+{
+    refcnt_dec(cl);
+}
+
+void
+clpi_unref(const CLPI_CL **cl)
+{
+    if (*cl) {
+        _clpi_free(*cl);
+        *cl = NULL;
+    }
 }
 
 void
@@ -742,7 +792,7 @@ _clpi_parse(BD_FILE_H *fp)
         return NULL;
     }
 
-    cl = calloc(1, sizeof(CLPI_CL));
+    cl = refcnt_calloc(sizeof(CLPI_CL), _clpi_clean);
     if (cl == NULL) {
         BD_DEBUG(DBG_CRIT, "out of memory\n");
         return NULL;
@@ -813,18 +863,26 @@ _clpi_get(BD_DISC *disc, const char *dir, const char *file)
     return cl;
 }
 
-CLPI_CL*
+const CLPI_CL*
 clpi_get(BD_DISC *disc, const char *file)
 {
-    CLPI_CL *cl;
+    const CLPI_CL *cl;
 
-    cl = _clpi_get(disc, "BDMV" DIR_SEP "CLIPINF", file);
+    cl = disc_cache_get(disc, file);
     if (cl) {
         return cl;
     }
 
-    /* if failed, try backup file */
-    cl = _clpi_get(disc, "BDMV" DIR_SEP "BACKUP" DIR_SEP "CLIPINF", file);
+    cl = _clpi_get(disc, "BDMV" DIR_SEP "CLIPINF", file);
+    if (!cl) {
+        /* if failed, try backup file */
+        cl = _clpi_get(disc, "BDMV" DIR_SEP "BACKUP" DIR_SEP "CLIPINF", file);
+    }
+
+    if (cl) {
+        disc_cache_put(disc, file, cl);
+    }
+
     return cl;
 }
 
@@ -835,7 +893,7 @@ clpi_copy(const CLPI_CL* src_cl)
     int ii, jj;
 
     if (src_cl) {
-        dest_cl = (CLPI_CL*) calloc(1, sizeof(CLPI_CL));
+        dest_cl = refcnt_calloc(sizeof(CLPI_CL), _clpi_clean);
         if (!dest_cl) {
             goto fail;
         }
@@ -899,8 +957,13 @@ clpi_copy(const CLPI_CL* src_cl)
                 dest_cl->program.progs[ii].streams[jj].rate = src_cl->program.progs[ii].streams[jj].rate;
                 dest_cl->program.progs[ii].streams[jj].aspect = src_cl->program.progs[ii].streams[jj].aspect;
                 dest_cl->program.progs[ii].streams[jj].oc_flag = src_cl->program.progs[ii].streams[jj].oc_flag;
+                dest_cl->program.progs[ii].streams[jj].cr_flag = src_cl->program.progs[ii].streams[jj].cr_flag;
+                dest_cl->program.progs[ii].streams[jj].dynamic_range_type = src_cl->program.progs[ii].streams[jj].dynamic_range_type;
+                dest_cl->program.progs[ii].streams[jj].color_space = src_cl->program.progs[ii].streams[jj].color_space;
+                dest_cl->program.progs[ii].streams[jj].hdr_plus_flag = src_cl->program.progs[ii].streams[jj].hdr_plus_flag;
                 dest_cl->program.progs[ii].streams[jj].char_code = src_cl->program.progs[ii].streams[jj].char_code;
                 memcpy(dest_cl->program.progs[ii].streams[jj].lang,src_cl->program.progs[ii].streams[jj].lang,4);
+                memcpy(dest_cl->program.progs[ii].streams[jj].isrc,src_cl->program.progs[ii].streams[jj].isrc,12);
             }
         }
 
@@ -950,6 +1013,6 @@ clpi_copy(const CLPI_CL* src_cl)
 
  fail:
     BD_DEBUG(DBG_CRIT, "out of memory\n");
-    clpi_free(&dest_cl);
+    _clpi_free(dest_cl);
     return NULL;
 }

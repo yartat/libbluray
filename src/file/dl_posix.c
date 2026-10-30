@@ -22,6 +22,10 @@
 #include "config.h"
 #endif
 
+#ifdef HAVE_DLADDR
+#  define _GNU_SOURCE  /* dladdr */
+#endif
+
 #include "dl.h"
 #include "util/macro.h"
 #include "util/logging.h"
@@ -81,11 +85,15 @@ void *dl_dlopen(const char *path, const char *version)
 #endif
 
     for (i = 0 ; search_paths[i] ; ++i) {
+#ifdef __OpenBSD__
+        name = str_printf("%s%s%s", search_paths[i], path, ext);
+#else
         if (version) {
             name = str_printf("%s%s%s.%s", search_paths[i], path, ext, version);
         } else {
             name = str_printf("%s%s%s", search_paths[i], path, ext);
         }
+#endif
 
         if (!name) {
             BD_DEBUG(DBG_FILE | DBG_CRIT, "out of memory\n");
@@ -127,10 +135,9 @@ const char *dl_get_path(void)
     if (!initialized) {
         initialized = 1;
 
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(HAVE_DLADDR)
         Dl_info dl_info;
-        int ret = dladdr((void *)dl_get_path, &dl_info);
-
+        int ret = dladdr((void *)(uintptr_t)dl_get_path, &dl_info);
         if (ret != 0) {
             lib_path = strdup(dl_info.dli_fname);
 

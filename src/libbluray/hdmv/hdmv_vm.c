@@ -310,6 +310,8 @@ const char *hdmv_event_str(hdmv_event_e event)
         EVENT_ENTRY(HDMV_EVENT_IG_END);
         EVENT_ENTRY(HDMV_EVENT_TITLE);
         EVENT_ENTRY(HDMV_EVENT_PLAY_PL);
+        EVENT_ENTRY(HDMV_EVENT_PLAY_PL_PI);
+        EVENT_ENTRY(HDMV_EVENT_PLAY_PL_PM);
         EVENT_ENTRY(HDMV_EVENT_PLAY_PI);
         EVENT_ENTRY(HDMV_EVENT_PLAY_PM);
         EVENT_ENTRY(HDMV_EVENT_PLAY_STOP);
@@ -336,19 +338,25 @@ static int _get_event(HDMV_VM *p, HDMV_EVENT *ev)
     return -1;
 }
 
-static int _queue_event(HDMV_VM *p, hdmv_event_e event, uint32_t param)
+static int _queue_event2(HDMV_VM *p, hdmv_event_e event, uint32_t param, uint32_t param2)
 {
     unsigned i;
     for (i = 0; i < sizeof(p->event) / sizeof(p->event[0]) - 1; i++) {
         if (p->event[i].event == HDMV_EVENT_NONE) {
             p->event[i].event = event;
             p->event[i].param = param;
+            p->event[i].param2 = param2;
             return 0;
         }
     }
 
-    BD_DEBUG(DBG_HDMV|DBG_CRIT, "_queue_event(%d:%s, %d): queue overflow !\n", event, hdmv_event_str(event), param);
+    BD_DEBUG(DBG_HDMV|DBG_CRIT, "_queue_event(%d:%s, %d %d): queue overflow !\n", event, hdmv_event_str(event), param, param2);
     return -1;
+}
+
+static int _queue_event(HDMV_VM *p, hdmv_event_e event, uint32_t param)
+{
+    return _queue_event2(p, event, param, 0);
 }
 
 /*
@@ -634,35 +642,46 @@ static int _call_title(HDMV_VM *p, uint32_t title)
  * playback control
  */
 
-static int _play_at(HDMV_VM *p, int playlist, int playitem, int playmark)
+static int _play_at(HDMV_VM *p, unsigned playlist, int playitem, int playmark)
 {
-    if (p->ig_object && playlist >= 0) {
-        BD_DEBUG(DBG_HDMV | DBG_CRIT, "play_at(list %d, item %d, mark %d): "
+    if (p->ig_object) {
+        BD_DEBUG(DBG_HDMV | DBG_CRIT, "play_at(list %u, item %d, mark %d): "
               "playlist change not allowed in interactive composition\n",
               playlist, playitem, playmark);
         return -1;
     }
 
-    if (!p->ig_object && playlist < 0) {
-        BD_DEBUG(DBG_HDMV | DBG_CRIT, "play_at(list %d, item %d, mark %d): "
-              "playlist not given in movie object (link commands not allowed)\n",
-              playlist, playitem, playmark);
+    BD_DEBUG(DBG_HDMV, "play_at(list %u, item %d, mark %d)\n",
+          playlist, playitem, playmark);
+
+    if (playitem >= 0) {
+        _queue_event2(p, HDMV_EVENT_PLAY_PL_PI, playlist, playitem);
+    } else if (playmark >= 0) {
+        _queue_event2(p, HDMV_EVENT_PLAY_PL_PM, playlist, playmark);
+    } else {
+        _queue_event(p, HDMV_EVENT_PLAY_PL, playlist);
+    }
+
+    _suspend_for_play_pl(p);
+
+    return 0;
+}
+
+static int _link_at(HDMV_VM *p, int playitem, int playmark)
+{
+    if (!p->ig_object) {
+        BD_DEBUG(DBG_HDMV | DBG_CRIT, "link_at(item %d, mark %d): "
+              "link commands not allowed in movie objects\n",
+              playitem, playmark);
         return -1;
     }
 
-    BD_DEBUG(DBG_HDMV, "play_at(list %d, item %d, mark %d)\n",
-          playlist, playitem, playmark);
-
-    if (playlist >= 0) {
-        _queue_event(p, HDMV_EVENT_PLAY_PL, playlist);
-        _suspend_for_play_pl(p);
-    }
-
     if (playitem >= 0) {
+        BD_DEBUG(DBG_HDMV, "link_at(playitem %d)\n", playitem);
         _queue_event(p, HDMV_EVENT_PLAY_PI, playitem);
     }
-
-    if (playmark >= 0) {
+    else if (playmark >= 0) {
+        BD_DEBUG(DBG_HDMV, "link_at(mark %d)\n", playmark);
         _queue_event(p, HDMV_EVENT_PLAY_PM, playmark);
     }
 
@@ -1064,7 +1083,7 @@ static int _hdmv_step(HDMV_VM *p)
                     }
                     switch (insn->branch_opt) {
                         case INSN_NOP:                      break;
-                        case INSN_GOTO:  p->pc   = dst - 1; break;
+                        case INSN_GOTO:  p->pc   = dst; inc_pc = 0; break;
                         case INSN_BREAK: p->pc   = 1 << 17; break;
                         default:
                             BD_DEBUG(DBG_HDMV|DBG_CRIT, "unknown BRANCH/GOTO option %d in opcode 0x%08x\n",
@@ -1093,8 +1112,8 @@ static int _hdmv_step(HDMV_VM *p)
                         case INSN_PLAY_PL:      _play_at(p, dst,  -1,  -1); break;
                         case INSN_PLAY_PL_PI:   _play_at(p, dst, src,  -1); break;
                         case INSN_PLAY_PL_PM:   _play_at(p, dst,  -1, src); break;
-                        case INSN_LINK_PI:      _play_at(p,  -1, dst,  -1); break;
-                        case INSN_LINK_MK:      _play_at(p,  -1,  -1, dst); break;
+                        case INSN_LINK_PI:      _link_at(p,      dst,  -1); break;
+                        case INSN_LINK_MK:      _link_at(p,       -1, dst); break;
                         case INSN_TERMINATE_PL: if (!_play_stop(p)) { inc_pc = 0; } break;
                         default:
                             BD_DEBUG(DBG_HDMV|DBG_CRIT, "unknown BRANCH/PLAY option %d in opcode 0x%08x\n",
@@ -1115,7 +1134,7 @@ static int _hdmv_step(HDMV_VM *p)
                 BD_DEBUG(DBG_HDMV|DBG_CRIT, "missing operand in BRANCH/JUMP opcode 0x%08x\n", *(uint32_t*)insn);
             }
             switch (insn->cmp_opt) {
-                case INSN_BC: p->pc += !!(dst & ~src); break;
+                case INSN_BC: p->pc += !!(src & ~dst); break;
                 case INSN_EQ: p->pc += !(dst == src); break;
                 case INSN_NE: p->pc += !(dst != src); break;
                 case INSN_GE: p->pc += !(dst >= src); break;
@@ -1150,10 +1169,10 @@ static int _hdmv_step(HDMV_VM *p)
                         case INSN_AND:    dst &= src;         break;
                         case INSN_OR:     dst |= src;         break;
                         case INSN_XOR:    dst ^= src;         break;
-                        case INSN_BITSET: dst |=  (1 << src); break;
-                        case INSN_BITCLR: dst &= ~(1 << src); break;
-                        case INSN_SHL:    dst <<= src;        break;
-                        case INSN_SHR:    dst >>= src;        break;
+                        case INSN_BITSET: if (src < 32) dst |=  (1 << src); break;
+                        case INSN_BITCLR: if (src < 32) dst &= ~(1 << src); break;
+                        case INSN_SHL:    if (src < 32) dst <<= src; else dst = 0; break;
+                        case INSN_SHR:    if (src < 32) dst >>= src; else dst = 0; break;
                         default:
                             BD_DEBUG(DBG_HDMV|DBG_CRIT, "unknown SET option %d in opcode 0x%08x\n",
                                      insn->set_opt, *(uint32_t*)insn);

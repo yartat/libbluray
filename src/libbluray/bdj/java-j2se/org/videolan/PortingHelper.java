@@ -19,14 +19,32 @@
 
 package org.videolan;
 
+import java.lang.reflect.InvocationTargetException;
+
 public class PortingHelper {
 
     public static void stopThread(Thread t) {
-        t.stop();
+        try {
+            Thread.class.getMethod("stop", new Class[0]).invoke(t, new Object[0]);
+        } catch (NoSuchMethodException e) {
+            // ignore
+        } catch (IllegalAccessException e) {
+            // ignore
+        } catch (InvocationTargetException e) {
+            // ignore
+        }
     }
 
     public static void stopThreadGroup(ThreadGroup t) {
-        t.stop();
+        try {
+            ThreadGroup.class.getMethod("stop", new Class[0]).invoke(t, new Object[0]);
+        } catch (NoSuchMethodException e) {
+            // ignore
+        } catch (IllegalAccessException e) {
+            // ignore
+        } catch (InvocationTargetException e) {
+            // ignore
+        }
     }
 
     public static String dumpStack(Thread t) {

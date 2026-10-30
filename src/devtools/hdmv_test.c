@@ -110,7 +110,7 @@ static void _read_to_eof(BLURAY *bd)
         _print_event(&ev);
     } while (bytes > 0);
 
-    printf("_read_to_eof(): read %"PRIu64" bytes\n", total);
+    printf("_read_to_eof(): read %" PRIu64 " bytes\n", total);
 }
 
 static void _print_events(BLURAY *bd)
@@ -188,6 +188,7 @@ int main(int argc, char *argv[])
         printf("Requested title %d\n", title);
     }
 
+    bd_set_debug_mask(DBG_CRIT);
     if (verbose) {
         printf("Enabling verbose debug\n");
         bd_set_debug_mask(bd_get_debug_mask() | DBG_HDMV | DBG_BLURAY);

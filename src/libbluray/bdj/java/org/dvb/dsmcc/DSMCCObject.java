@@ -99,7 +99,7 @@ public class DSMCCObject extends File {
     }
 
     public void unload() throws NotLoadedException {
-        if (loaded)
+        if (!loaded)
             throw new NotLoadedException();
 
         loaded = false;
@@ -114,6 +114,13 @@ public class DSMCCObject extends File {
             e.printStackTrace();
             return null;
         }
+    }
+
+    public boolean equals(Object obj) {
+        if (!(obj instanceof DSMCCObject)) {
+            return false;
+        }
+        return super.equals(obj);
     }
 
     public void addObjectChangeEventListener(ObjectChangeEventListener listener)
